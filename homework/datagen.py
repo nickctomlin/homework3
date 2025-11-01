@@ -10,6 +10,10 @@ def generate_dataset(output_json: str, oversample: int = 10, temperature: float 
     from .cot import CoTModel
     from .data import Dataset, is_answer_valid
     
+    # Convert parameters to correct types (Fire may pass them as strings)
+    oversample = int(oversample)
+    temperature = float(temperature)
+    
     # Use the instruct model for better CoT reasoning
     model = CoTModel(checkpoint="HuggingFaceTB/SmolLM2-1.7B-Instruct")
     train_dataset = Dataset("train")
