@@ -118,7 +118,7 @@ class BaseLLM:
         
         # Prepare generation arguments
         generation_kwargs = {
-            "max_new_tokens": 50,
+            "max_new_tokens": 75,  # Increased to allow for reasoning + answer format
             "eos_token_id": self.tokenizer.eos_token_id,
             "pad_token_id": self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id,
         }

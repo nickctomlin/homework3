@@ -11,7 +11,7 @@ class CoTModel(BaseLLM):
         messages = [
             {
                 "role": "system",
-                "content": "You are a helpful assistant that converts units. Always end your answer with <answer>number</answer>. Be concise."
+                "content": "You are a unit conversion assistant. You MUST end every answer with <answer>number</answer> where number is the final converted value. Show your reasoning briefly, then provide the answer in the required format."
             },
             {
                 "role": "user",
@@ -19,7 +19,7 @@ class CoTModel(BaseLLM):
             },
             {
                 "role": "assistant",
-                "content": "1 kg = 1000 grams. 2 * 1000 = <answer>2000</answer>"
+                "content": "1 kg equals 1000 grams. So 2 kg = 2 × 1000 = <answer>2000</answer>"
             },
             {
                 "role": "user",
