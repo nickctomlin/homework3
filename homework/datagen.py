@@ -1,4 +1,4 @@
-def generate_dataset(output_json: str = "data/rft.json", oversample: int = 10, temperature: float = 0.6):
+def generate_dataset(output_json="data/rft.json", oversample=10, temperature=0.6):
     """
     Generate RFT dataset by:
     1. Using CoTModel to generate multiple completions for each question
@@ -39,19 +39,27 @@ def generate_dataset(output_json: str = "data/rft.json", oversample: int = 10, t
     rft_data = []
     
     print(f"Generating RFT dataset for {len(train_dataset)} questions...")
+    print(f"Using oversample={oversample}, temperature={temperature}")
+    
     for idx, (question, correct_answer) in enumerate(train_dataset):
         if idx % 10 == 0:
             print(f"Processing question {idx}/{len(train_dataset)}")
         
         # Generate multiple completions
+        # Need to format the prompt first (CoTModel.format_prompt handles the chat template)
+        formatted_question = model.format_prompt(question)
         generations = model.batched_generate(
-            [question],
+            [formatted_question],
             num_return_sequences=oversample,
             temperature=temperature
         )
         
         # generations is a list of lists, get the first (and only) prompt's generations
         completions = generations[0] if isinstance(generations[0], list) else [generations[0]]
+        
+        # Debug: print first few completions for first question
+        if idx == 0 and len(completions) > 0:
+            print(f"Sample completion: {completions[0][:200]}...")
         
         # Find the first completion with a correct answer
         found_correct = False
@@ -63,11 +71,13 @@ def generate_dataset(output_json: str = "data/rft.json", oversample: int = 10, t
                     # Found a correct answer, add to dataset
                     rft_data.append([question, float(correct_answer), completion])
                     found_correct = True
+                    if idx < 5:  # Debug first few successes
+                        print(f"  ✓ Found correct answer: {parsed_answer} (expected: {correct_answer})")
                     break
         
         # If no correct answer found, skip this data point (as per instructions)
-        if not found_correct:
-            continue
+        if not found_correct and idx < 5:  # Debug first few failures
+            print(f"  ✗ No correct answer found (got {len(completions)} completions)")
     
     # Save to JSON file
     output_path = Path(output_json)
