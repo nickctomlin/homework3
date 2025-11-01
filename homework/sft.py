@@ -1,3 +1,5 @@
+import torch
+
 from .base_llm import BaseLLM
 from .data import Dataset, benchmark
 
@@ -49,7 +51,16 @@ def format_example(prompt: str, answer: str) -> dict[str, str]:
     """
     Construct a question / answer pair. Consider rounding the answer to make it easier for the LLM.
     """
-    raise NotImplementedError()
+    # Round the answer to a reasonable precision (3 decimal places)
+    rounded_answer = round(float(answer), 3)
+    
+    # Format as question + answer with <answer> tags
+    formatted_answer = f"<answer>{rounded_answer}</answer>"
+    
+    return {
+        "question": prompt,
+        "answer": formatted_answer
+    }
 
 
 class TokenizedDataset:
@@ -75,10 +86,72 @@ class TokenizedDataset:
 
 
 def train_model(
-    output_dir: str,
+    output_dir: str = None,
     **kwargs,
 ):
-    raise NotImplementedError()
+    from pathlib import Path
+    from peft import LoraConfig, get_peft_model
+    from transformers import Trainer, TrainingArguments
+    
+    # Set default output directory
+    if output_dir is None:
+        output_dir = str(Path(__file__).parent / "sft_model")
+    
+    # Initialize model and tokenizer
+    llm = BaseLLM()
+    
+    # Configure LoRA
+    # Using r=8 to keep model size below 20MB, lora_alpha=32 (4*8)
+    lora_config = LoraConfig(
+        target_modules="all-linear",
+        r=8,
+        lora_alpha=32,
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    
+    # Apply LoRA to model
+    llm.model = get_peft_model(llm.model, lora_config)
+    
+    # Enable input require grads if using GPU (for gradient checkpointing)
+    if torch.cuda.is_available():
+        llm.model.enable_input_require_grads()
+    
+    # Load and prepare dataset
+    train_dataset = Dataset("train")
+    tokenized_dataset = TokenizedDataset(llm.tokenizer, train_dataset, format_example)
+    
+    # Training arguments
+    training_args = TrainingArguments(
+        output_dir=output_dir,
+        logging_dir=output_dir,
+        report_to="tensorboard",
+        gradient_checkpointing=True,
+        learning_rate=5e-4,
+        num_train_epochs=3,
+        per_device_train_batch_size=32,
+        save_strategy="epoch",
+        logging_steps=10,
+    )
+    
+    # Create trainer
+    trainer = Trainer(
+        model=llm.model,
+        args=training_args,
+        train_dataset=tokenized_dataset,
+    )
+    
+    # Train
+    trainer.train()
+    
+    # Save the model to the specified directory
+    trainer.save_model()
+    
+    # Also save to the homework/sft_model directory as specified
+    sft_model_path = Path(__file__).parent / "sft_model"
+    trainer.save_model(str(sft_model_path))
+    
+    # Test the model
     test_model(output_dir)
 
 

@@ -105,7 +105,61 @@ class BaseLLM:
                 for r in self.batched_generate(prompts[idx : idx + micro_batch_size], num_return_sequences, temperature)
             ]
 
-        raise NotImplementedError()
+        # Set padding side to left for generation (aligns sequences to the right)
+        self.tokenizer.padding_side = "left"
+        
+        # Tokenize all prompts with padding
+        tokenized = self.tokenizer(prompts, padding=True, return_tensors="pt")
+        input_ids = tokenized["input_ids"].to(self.device)
+        attention_mask = tokenized["attention_mask"].to(self.device)
+        
+        # Store input length to extract only generated tokens later
+        input_length = input_ids.shape[1]
+        
+        # Prepare generation arguments
+        generation_kwargs = {
+            "max_new_tokens": 50,
+            "eos_token_id": self.tokenizer.eos_token_id,
+            "pad_token_id": self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id,
+        }
+        
+        # Set sampling parameters
+        if temperature > 0:
+            generation_kwargs["do_sample"] = True
+            generation_kwargs["temperature"] = temperature
+        else:
+            generation_kwargs["do_sample"] = False
+        
+        # Handle num_return_sequences
+        if num_return_sequences is not None:
+            generation_kwargs["num_return_sequences"] = num_return_sequences
+        
+        # Generate
+        with torch.no_grad():
+            outputs = self.model.generate(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                **generation_kwargs
+            )
+        
+        # Extract only the generated tokens (skip input tokens)
+        generated_tokens = outputs[:, input_length:]
+        
+        # Decode the generated tokens
+        decoded = self.tokenizer.batch_decode(generated_tokens, skip_special_tokens=True)
+        
+        # Reshape if num_return_sequences is specified
+        if num_return_sequences is not None:
+            # Flattened list of length len(prompts) * num_return_sequences
+            # Need to reshape to list of lists
+            result = []
+            for i in range(len(prompts)):
+                start_idx = i * num_return_sequences
+                end_idx = start_idx + num_return_sequences
+                result.append(decoded[start_idx:end_idx])
+            return result
+        else:
+            return decoded
 
     def answer(self, *questions) -> list[float]:
         """
