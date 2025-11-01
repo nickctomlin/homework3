@@ -1,18 +1,36 @@
-def generate_dataset(output_json: str, oversample: int = 10, temperature: float = 0.6):
+def generate_dataset(output_json: str = "data/rft.json", oversample: int = 10, temperature: float = 0.6):
     """
     Generate RFT dataset by:
     1. Using CoTModel to generate multiple completions for each question
     2. Selecting the one with the correct answer
     3. Saving to JSON file
+    
+    Args:
+        output_json: Path to output JSON file (default: "data/rft.json")
+        oversample: Number of generations per question (default: 10)
+        temperature: Sampling temperature (default: 0.6)
     """
     import json
     from pathlib import Path
     from .cot import CoTModel
     from .data import Dataset, is_answer_valid
     
-    # Convert parameters to correct types (Fire may pass them as strings)
-    oversample = int(oversample)
-    temperature = float(temperature)
+    # Convert parameters to correct types (Fire passes everything as strings from command line)
+    # Safe conversion that handles strings
+    try:
+        output_json = str(output_json)
+    except:
+        pass
+    
+    try:
+        oversample = int(float(str(oversample)))
+    except (ValueError, TypeError):
+        oversample = 10  # default
+    
+    try:
+        temperature = float(str(temperature))
+    except (ValueError, TypeError):
+        temperature = 0.6  # default
     
     # Use the instruct model for better CoT reasoning
     model = CoTModel(checkpoint="HuggingFaceTB/SmolLM2-1.7B-Instruct")
