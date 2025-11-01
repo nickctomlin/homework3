@@ -11,7 +11,7 @@ class CoTModel(BaseLLM):
         messages = [
             {
                 "role": "system",
-                "content": "You are a helpful assistant that converts units. Be concise."
+                "content": "You are a helpful assistant that converts units. Always end your answer with <answer>number</answer>. Be concise."
             },
             {
                 "role": "user",
