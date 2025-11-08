@@ -223,7 +223,7 @@ def load_assignment(logger, assignment_path: str, pre_import_fn=None):
     import tempfile
     import zipfile
     from pathlib import Path
-    from shutil import rmtree
+    from shutil import rmtree, copytree
 
     assignment_path = Path(assignment_path)
 
@@ -246,8 +246,13 @@ def load_assignment(logger, assignment_path: str, pre_import_fn=None):
             dataset_path = Path(__file__).parent.parent / "data"
 
             # set soft link of the data folder to the module_dir/data
+            # On Windows, symlinks require admin privileges, so use copy instead
             if dataset_path.exists() and not module_dir.joinpath("data").exists():
-                module_dir.joinpath("data").symlink_to(dataset_path)
+                import os
+                if os.name == 'nt':  # Windows
+                    copytree(dataset_path, module_dir.joinpath("data"))
+                else:
+                    module_dir.joinpath("data").symlink_to(dataset_path)
 
             if len(module_names) != 1:
                 logger.error(f"Malformed zip file, expected one top-level folder, got {len(module_names)}")

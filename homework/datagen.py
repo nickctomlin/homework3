@@ -15,8 +15,6 @@ def generate_dataset(output_json="data/rft.json", oversample=10, temperature=0.6
     from .cot import CoTModel
     from .data import Dataset, is_answer_valid
     
-    # Convert parameters to correct types (Fire passes everything as strings from command line)
-    # Safe conversion that handles strings
     try:
         output_json = str(output_json)
     except:
@@ -25,14 +23,13 @@ def generate_dataset(output_json="data/rft.json", oversample=10, temperature=0.6
     try:
         oversample = int(float(str(oversample)))
     except (ValueError, TypeError):
-        oversample = 10  # default
+        oversample = 10
     
     try:
         temperature = float(str(temperature))
     except (ValueError, TypeError):
-        temperature = 0.6  # default
+        temperature = 0.6
     
-    # Use the instruct model for better CoT reasoning
     model = CoTModel(checkpoint="HuggingFaceTB/SmolLM2-1.7B-Instruct")
     train_dataset = Dataset("train")
     
@@ -45,8 +42,6 @@ def generate_dataset(output_json="data/rft.json", oversample=10, temperature=0.6
         if idx % 10 == 0:
             print(f"Processing question {idx}/{len(train_dataset)}")
         
-        # Generate multiple completions
-        # Need to format the prompt first (CoTModel.format_prompt handles the chat template)
         formatted_question = model.format_prompt(question)
         generations = model.batched_generate(
             [formatted_question],
@@ -54,32 +49,25 @@ def generate_dataset(output_json="data/rft.json", oversample=10, temperature=0.6
             temperature=temperature
         )
         
-        # generations is a list of lists, get the first (and only) prompt's generations
         completions = generations[0] if isinstance(generations[0], list) else [generations[0]]
         
-        # Debug: print first few completions for first question
         if idx == 0 and len(completions) > 0:
             print(f"Sample completion: {completions[0][:200]}...")
         
-        # Find the first completion with a correct answer
         found_correct = False
         for completion in completions:
             parsed_answer = model.parse_answer(completion)
-            # Check if not NaN (NaN != NaN is True, so not NaN means parsed_answer == parsed_answer)
-            if parsed_answer == parsed_answer:  # Check if not NaN
+            if parsed_answer == parsed_answer:
                 if is_answer_valid(parsed_answer, correct_answer):
-                    # Found a correct answer, add to dataset
                     rft_data.append([question, float(correct_answer), completion])
                     found_correct = True
-                    if idx < 5:  # Debug first few successes
-                        print(f"  ✓ Found correct answer: {parsed_answer} (expected: {correct_answer})")
+                    if idx < 5:
+                        print(f"  [OK] Found correct answer: {parsed_answer} (expected: {correct_answer})")
                     break
         
-        # If no correct answer found, skip this data point (as per instructions)
-        if not found_correct and idx < 5:  # Debug first few failures
-            print(f"  ✗ No correct answer found (got {len(completions)} completions)")
+        if not found_correct and idx < 5:
+            print(f"  [X] No correct answer found (got {len(completions)} completions)")
     
-    # Save to JSON file
     output_path = Path(output_json)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     

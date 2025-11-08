@@ -4,7 +4,34 @@ from .base_llm import BaseLLM
 from .data import Dataset, benchmark
 
 
-def load() -> BaseLLM:
+class SFTModel(BaseLLM):
+    """SFT model that formats prompts correctly for inference"""
+    def format_prompt(self, question: str) -> str:
+        """
+        Format prompt using chat template to match training format.
+        During training, we use chat template with question + answer.
+        """
+        messages = [
+            {
+                "role": "system",
+                "content": "You are a unit conversion assistant. You MUST end every answer with <answer>number</answer> where number is the final converted value."
+            },
+            {
+                "role": "user",
+                "content": question
+            }
+        ]
+        
+        formatted = self.tokenizer.apply_chat_template(
+            messages,
+            add_generation_prompt=True,
+            tokenize=False
+        )
+        
+        return formatted
+
+
+def load() -> SFTModel:
     from pathlib import Path
 
     from peft import PeftModel
@@ -12,7 +39,7 @@ def load() -> BaseLLM:
     model_name = "sft_model"
     model_path = Path(__file__).parent / model_name
 
-    llm = BaseLLM()
+    llm = SFTModel()
     llm.model = PeftModel.from_pretrained(llm.model, model_path).to(llm.device)
     llm.model.eval()
 
@@ -22,22 +49,79 @@ def load() -> BaseLLM:
 def tokenize(tokenizer, question: str, answer: str):
     """
     Tokenize a data element.
-    We first append the <EOS> token to the question / answer pair.
+    We use chat template format to match the base model's expected format.
     Then we tokenize and construct the ground truth `labels`.
     `labels[i] == -100` for the question or masked out parts, since we only want to supervise
     the answer.
     """
-    full_text = f"{question} {answer}{tokenizer.eos_token}"
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a unit conversion assistant. You MUST end every answer with <answer>number</answer> where number is the final converted value."
+        },
+        {
+            "role": "user",
+            "content": question
+        },
+        {
+            "role": "assistant",
+            "content": answer
+        }
+    ]
+    
+    full_text = tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=False,
+        tokenize=False
+    )
+    
+    full_text = full_text + tokenizer.eos_token
 
     tokenizer.padding_side = "right"
     tokenizer.pad_token = tokenizer.eos_token
     full = tokenizer(full_text, padding="max_length", truncation=True, max_length=128)
 
     input_ids = full["input_ids"]
-    question_len = len(tokenizer(question)["input_ids"])
+    
+    if hasattr(input_ids, 'tolist'):
+        input_ids_list = input_ids.tolist()
+    else:
+        input_ids_list = list(input_ids)
+    
+    attention_mask = full["attention_mask"]
+    if hasattr(attention_mask, "sum"):
+        actual_length = int(attention_mask.sum().item())
+    else:
+        actual_length = int(sum(attention_mask))
+    
+    actual_tokens = input_ids_list[:actual_length]
+    
+    question_len = len(input_ids_list)
+    answer_start_pattern = [11247, 46]
+    
+    pattern_found = False
+    for i in range(len(actual_tokens) - len(answer_start_pattern) + 1):
+        if actual_tokens[i:i+len(answer_start_pattern)] == answer_start_pattern:
+            question_len = i
+            pattern_found = True
+            break
+    
+    if question_len >= len(actual_tokens):
+        answer_start_text = "<answer>"
+        answer_start_tokens = tokenizer(answer_start_text, add_special_tokens=False)["input_ids"]
+        for i in range(len(actual_tokens) - len(answer_start_tokens) + 1):
+            if actual_tokens[i:i+len(answer_start_tokens)] == answer_start_tokens:
+                question_len = i
+                break
+    
+    question_len = min(question_len, len(input_ids))
 
-    # Create labels: mask out the prompt part
-    labels = [-100] * question_len + input_ids[question_len:]
+    if hasattr(input_ids, 'tolist'):
+        input_ids_list_for_labels = input_ids.tolist()
+    else:
+        input_ids_list_for_labels = list(input_ids)
+    
+    labels = [-100] * question_len + input_ids_list_for_labels[question_len:]
 
     for i in range(len(labels)):
         if full["attention_mask"][i] == 0:
@@ -51,10 +135,7 @@ def format_example(prompt: str, answer: str) -> dict[str, str]:
     """
     Construct a question / answer pair. Consider rounding the answer to make it easier for the LLM.
     """
-    # Round the answer to a reasonable precision (3 decimal places)
     rounded_answer = round(float(answer), 3)
-    
-    # Format as question + answer with <answer> tags
     formatted_answer = f"<answer>{rounded_answer}</answer>"
     
     return {
@@ -93,15 +174,11 @@ def train_model(
     from peft import LoraConfig, get_peft_model
     from transformers import Trainer, TrainingArguments
     
-    # Set default output directory
     if output_dir is None:
         output_dir = str(Path(__file__).parent / "sft_model")
     
-    # Initialize model and tokenizer
     llm = BaseLLM()
     
-    # Configure LoRA
-    # Using r=8 to keep model size below 20MB, lora_alpha=32 (4*8)
     lora_config = LoraConfig(
         target_modules="all-linear",
         r=8,
@@ -110,48 +187,38 @@ def train_model(
         task_type="CAUSAL_LM",
     )
     
-    # Apply LoRA to model
     llm.model = get_peft_model(llm.model, lora_config)
     
-    # Enable input require grads if using GPU (for gradient checkpointing)
     if torch.cuda.is_available():
         llm.model.enable_input_require_grads()
     
-    # Load and prepare dataset
     train_dataset = Dataset("train")
     tokenized_dataset = TokenizedDataset(llm.tokenizer, train_dataset, format_example)
     
-    # Training arguments
     training_args = TrainingArguments(
         output_dir=output_dir,
         logging_dir=output_dir,
         report_to="tensorboard",
         gradient_checkpointing=True,
         learning_rate=5e-4,
-        num_train_epochs=3,
+        num_train_epochs=5,
         per_device_train_batch_size=32,
         save_strategy="epoch",
         logging_steps=10,
     )
     
-    # Create trainer
     trainer = Trainer(
         model=llm.model,
         args=training_args,
         train_dataset=tokenized_dataset,
     )
     
-    # Train
     trainer.train()
-    
-    # Save the model to the specified directory
     trainer.save_model()
     
-    # Also save to the homework/sft_model directory as specified
     sft_model_path = Path(__file__).parent / "sft_model"
     trainer.save_model(str(sft_model_path))
     
-    # Test the model
     test_model(output_dir)
 
 
@@ -159,7 +226,6 @@ def test_model(ckpt_path: str):
     testset = Dataset("valid")
     llm = BaseLLM()
 
-    # Load the model with LoRA adapters
     from peft import PeftModel
 
     llm.model = PeftModel.from_pretrained(llm.model, ckpt_path).to(llm.device)

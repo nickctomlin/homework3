@@ -6,13 +6,23 @@ from .base_llm import BaseLLM
 from .sft import test_model, TokenizedDataset
 
 
-def load() -> BaseLLM:
+class RFTModel(BaseLLM):
+    """RFT model that formats prompts correctly for inference"""
+    def format_prompt(self, question: str) -> str:
+        """
+        Format prompt to match training format: question + space
+        During training, format was: question + " " + reasoning (which includes answer)
+        """
+        return f"{question} "
+
+
+def load() -> RFTModel:
     from peft import PeftModel
 
     model_name = "rft_model"
     model_path = Path(__file__).parent / model_name
 
-    llm = BaseLLM()
+    llm = RFTModel()
     llm.model = PeftModel.from_pretrained(llm.model, model_path).to(llm.device)
     llm.model.eval()
 
@@ -26,7 +36,7 @@ def format_rft_example(question: str, answer: str, reasoning: str) -> dict[str, 
     """
     return {
         "question": question,
-        "answer": reasoning  # The reasoning already contains <answer> tags
+        "answer": reasoning
     }
 
 
@@ -40,7 +50,7 @@ class RFTDataset:
         return len(self.data)
     
     def __getitem__(self, idx):
-        return self.data[idx]  # Returns [question, answer, reasoning]
+        return self.data[idx]
 
 
 def train_model(
@@ -54,22 +64,17 @@ def train_model(
     from peft import LoraConfig, get_peft_model
     from transformers import Trainer, TrainingArguments
     
-    # Set default output directory
     if output_dir is None:
         output_dir = str(Path(__file__).parent / "rft_model")
     
-    # Load RFT dataset
     rft_data_path = Path(__file__).parent.parent / "data" / "rft.json"
     if not rft_data_path.exists():
         raise FileNotFoundError(f"RFT dataset not found at {rft_data_path}. Run datagen.py first.")
     
     rft_dataset = RFTDataset(str(rft_data_path))
     
-    # Initialize model and tokenizer
     llm = BaseLLM()
     
-    # Configure LoRA with slightly larger rank for RFT (can be up to 50MB total)
-    # Using r=16, lora_alpha=64 (4*16) to allow for better performance
     lora_config = LoraConfig(
         target_modules="all-linear",
         r=16,
@@ -78,17 +83,13 @@ def train_model(
         task_type="CAUSAL_LM",
     )
     
-    # Apply LoRA to model
     llm.model = get_peft_model(llm.model, lora_config)
     
-    # Enable input require grads if using GPU (for gradient checkpointing)
     if torch.cuda.is_available():
         llm.model.enable_input_require_grads()
     
-    # Create tokenized dataset
     tokenized_dataset = TokenizedDataset(llm.tokenizer, rft_dataset, format_rft_example)
     
-    # Training arguments
     training_args = TrainingArguments(
         output_dir=output_dir,
         logging_dir=output_dir,
@@ -101,24 +102,18 @@ def train_model(
         logging_steps=10,
     )
     
-    # Create trainer
     trainer = Trainer(
         model=llm.model,
         args=training_args,
         train_dataset=tokenized_dataset,
     )
     
-    # Train
     trainer.train()
-    
-    # Save the model to the specified directory
     trainer.save_model()
     
-    # Also save to the homework/rft_model directory as specified
     rft_model_path = Path(__file__).parent / "rft_model"
     trainer.save_model(str(rft_model_path))
     
-    # Test the model
     test_model(output_dir)
 
 
